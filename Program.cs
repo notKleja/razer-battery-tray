@@ -9,18 +9,55 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--probe")
+        {
+            Probe();
+            return;
+        }
+
         using var mutex = new Mutex(true, "RazerBatteryTray.SingleInstance", out bool first);
         if (!first) return;
 
-        RegisterStartup();
+        RegisterStartupOnce();
         ApplicationConfiguration.Initialize();
         Application.Run(new TrayContext());
     }
 
-    static void RegisterStartup()
+    /// <summary>Writes every Razer interface and every protocol attempt to a text file and opens it.</summary>
+    static void Probe()
     {
-        using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-        key.SetValue("RazerBatteryTray", $"\"{Environment.ProcessPath}\"");
+        var report = new System.Text.StringBuilder();
+        report.AppendLine($"RazerBatteryTray probe {DateTime.Now:u}");
+        report.AppendLine($"Windows {Environment.OSVersion.Version}");
+        report.AppendLine();
+        try
+        {
+            var r = RazerHid.Read(line => report.AppendLine(line));
+            report.AppendLine();
+            report.AppendLine($"Result: {r.Status} {r.DeviceName} {r.Percent}% charging={r.Charging}");
+        }
+        catch (Exception e)
+        {
+            report.AppendLine(e.ToString());
+        }
+        var file = Path.Combine(Path.GetTempPath(), "RazerBatteryTray-probe.txt");
+        File.WriteAllText(file, report.ToString());
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(file) { UseShellExecute = true });
+    }
+
+    /// <summary>
+    /// Adds the startup entry on first launch only, so removing it (or disabling it in
+    /// Task Manager) sticks. Debug builds never register.
+    /// </summary>
+    static void RegisterStartupOnce()
+    {
+#if !DEBUG
+        using var app = Registry.CurrentUser.CreateSubKey(@"Software\RazerBatteryTray");
+        if (app.GetValue("StartupRegistered") != null) return;
+        using var run = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+        run.SetValue("RazerBatteryTray", $"\"{Environment.ProcessPath}\"");
+        app.SetValue("StartupRegistered", 1, RegistryValueKind.DWord);
+#endif
     }
 }
 
@@ -65,11 +102,16 @@ sealed class TrayContext : ApplicationContext
         _busy = true;
         try
         {
-            _reading = await Task.Run(RazerHid.Read);
+            _reading = await Task.Run(() => RazerHid.Read());
             if (_reading.Status == ReadStatus.Ok) _lastGood = _reading;
-            UpdateIcon();
+        }
+        catch (Exception)
+        {
+            // A failed read must never take the app down; show the unknown state and retry next tick.
+            _reading = new BatteryReading(ReadStatus.NotFound);
         }
         finally { _busy = false; }
+        UpdateIcon();
     }
 
     void UpdateIcon()
@@ -227,11 +269,18 @@ static class TrayText
         Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
             ?.GetValue("SystemUsesLightTheme") as int? == 1 ? Color.FromArgb(0xE4, 0, 0, 0) : Color.White;
 
+    // The icon is shown on the taskbar, so use the taskbar's current DPI rather than the
+    // system DPI captured at startup (which goes stale when scaling changes).
     static float DpiScale()
     {
-        using var g = Graphics.FromHwnd(IntPtr.Zero);
-        return g.DpiX / 96f;
+        var taskbar = FindWindow("Shell_TrayWnd", null);
+        uint dpi = taskbar != IntPtr.Zero ? GetDpiForWindow(taskbar) : 0;
+        if (dpi == 0) dpi = GetDpiForSystem();
+        return dpi / 96f;
     }
 
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string? name);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern uint GetDpiForSystem();
 }

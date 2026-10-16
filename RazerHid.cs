@@ -33,18 +33,39 @@ public static class RazerHid
     static string? _lastPath;
     static byte _lastTid = 0x1f;
 
-    public static BatteryReading Read()
+    /// <summary>
+    /// Finds the mouse and reads its battery. Interfaces whose top-level collection is a
+    /// Generic Desktop Mouse are tried first, and when any exists only those are used, so a
+    /// Razer headset or keyboard can never be reported in place of the mouse.
+    /// </summary>
+    public static BatteryReading Read(Action<string>? log = null)
     {
-        var candidates = EnumerateRazerInterfaces();
-        if (_lastPath != null && candidates.Remove(_lastPath)) candidates.Insert(0, _lastPath);
+        var candidates = new List<(string Path, bool IsMouse)>();
+        foreach (var path in EnumerateRazerInterfaces())
+        {
+            using var handle = Open(path);
+            var caps = handle == null ? null : Caps(handle);
+            log?.Invoke($"{path}\n    open={handle != null} usage={caps?.UsagePage:X4}/{caps?.Usage:X4} featureLen={caps?.FeatureReportByteLength}");
+            if (caps is { } c && c.FeatureReportByteLength == ReportLength)
+                candidates.Add((path, c.UsagePage == 0x01 && c.Usage == 0x02));
+        }
+
+        bool anyMouse = candidates.Any(c => c.IsMouse);
+        var ordered = candidates
+            .Where(c => c.IsMouse || !anyMouse)
+            .OrderBy(c => c.Path == _lastPath ? 0 : 1)
+            // The control channel is usually on the first interface's mouse collection.
+            .ThenBy(c => c.Path.Contains("mi_00", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .Select(c => c.Path);
+        log?.Invoke($"candidates: {candidates.Count}, mouse interfaces: {candidates.Count(c => c.IsMouse)}");
 
         bool sawAsleep = false;
         string? asleepName = null;
 
-        foreach (var path in candidates)
+        foreach (var path in ordered)
         {
             using var handle = Open(path);
-            if (handle == null || !HasRazerFeatureReport(handle)) continue;
+            if (handle == null) continue;
 
             var tids = new List<byte> { _lastTid };
             tids.AddRange(TransactionIds.Where(t => t != _lastTid));
@@ -52,6 +73,7 @@ public static class RazerHid
             foreach (var tid in tids)
             {
                 var battery = Query(handle, tid, 0x07, 0x80, out byte status);
+                log?.Invoke($"  {path}\n    tid=0x{tid:X2} battery status=0x{status:X2}{(battery != null ? $" raw={battery[1]}" : "")}");
                 if (battery == null)
                 {
                     if (status == StatusTimeout)
@@ -117,12 +139,12 @@ public static class RazerHid
         return crc;
     }
 
-    static bool HasRazerFeatureReport(SafeFileHandle handle)
+    static HIDP_CAPS? Caps(SafeFileHandle handle)
     {
-        if (!HidD_GetPreparsedData(handle, out var pp)) return false;
+        if (!HidD_GetPreparsedData(handle, out var pp)) return null;
         try
         {
-            return HidP_GetCaps(pp, out var caps) == HIDP_STATUS_SUCCESS && caps.FeatureReportByteLength == ReportLength;
+            return HidP_GetCaps(pp, out var caps) == HIDP_STATUS_SUCCESS ? caps : null;
         }
         finally { HidD_FreePreparsedData(pp); }
     }
@@ -170,9 +192,7 @@ public static class RazerHid
             }
         }
         finally { SetupDiDestroyDeviceInfoList(set); }
-
-        // The control channel is usually on the first interface's mouse collection.
-        return result.OrderBy(p => p.Contains("mi_00", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ToList();
+        return result;
     }
 
     #region Win32

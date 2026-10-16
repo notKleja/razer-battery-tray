@@ -10,13 +10,25 @@ A tiny Windows 11 tray app that shows your Razer wireless mouse's battery level 
 
 Requires the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0).
 
-```bash
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o "%LOCALAPPDATA%\Programs\RazerBatteryTray"
+In PowerShell:
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o "$env:LOCALAPPDATA\Programs\RazerBatteryTray"
 ```
 
-Run `RazerBatteryTray.exe` from that folder. It registers itself under `HKCU\...\Run` so it starts at login. If it lands in the hidden-icons area behind `^`, drag it onto the taskbar.
+Run `RazerBatteryTray.exe` from that folder. On first launch it adds itself to `HKCU\...\Run` so it starts at login. If you remove that entry or disable it in Task Manager, it stays off. If the icon lands in the hidden-icons area behind `^`, drag it onto the taskbar.
 
-Right-click the icon for **Refresh now** and **Exit**. To remove the app completely, exit it, delete the folder, and delete the `RazerBatteryTray` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+Right-click the icon for **Refresh now** and **Exit**. To remove the app completely, exit it, delete the folder, and delete the `RazerBatteryTray` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` and the `HKCU\Software\RazerBatteryTray` key.
+
+## Troubleshooting
+
+If it shows `–` or the wrong value, run:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\RazerBatteryTray\RazerBatteryTray.exe" --probe
+```
+
+This writes `RazerBatteryTray-probe.txt` to your temp folder and opens it. The file lists every Razer HID interface the app found and how each one answered. Attach it when you report an issue. Razer Synapse can hold the device and make reads fail, so try again with Synapse closed.
 
 ## How the battery is read
 
@@ -31,7 +43,7 @@ Razer mice use a 90-byte HID feature report (report ID 0):
 | 8–87 | arguments |
 | 88 | XOR of bytes 2–87 |
 
-Battery percent = `args[1] * 100 / 255`, and charging when `args[1] == 1`. The app opens the HID collection with zero access rights, which Windows allows for feature reports even on mouse collections. It then tries each transaction id and remembers the one that answers.
+Battery percent = `args[1] * 100 / 255`, and charging when `args[1] == 1`. The app opens the HID collection with zero access rights, which Windows allows for feature reports even on mouse collections. It then tries each transaction id and remembers the one that answers. Interfaces whose top-level collection is a mouse are used first, and when one exists no other Razer device is queried, so a Razer headset or keyboard can't be reported in place of the mouse.
 
 Protocol details come from these projects:
 - [OpenMouse-Project/mouse-protocol](https://github.com/OpenMouse-Project/mouse-protocol)
