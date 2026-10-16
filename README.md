@@ -8,9 +8,16 @@ A tiny Windows 11 tray app that shows your Razer wireless mouse's battery level 
 
 ## Install
 
-Requires the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0).
+Download an exe from the [latest release](https://github.com/notKleja/razer-battery-tray/releases/latest):
 
-In PowerShell:
+- **`RazerBatteryTray-win-x64-standalone.exe`** (48 MB) works out of the box.
+- **`RazerBatteryTray-win-x64.exe`** (0.2 MB) needs the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0).
+
+Put it somewhere permanent, such as `%LOCALAPPDATA%\Programs\RazerBatteryTray`, and run it. The exe isn't code-signed, so SmartScreen may warn on first run. Choose **More info → Run anyway**.
+
+### Build from source
+
+Requires the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0). In PowerShell:
 
 ```powershell
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o "$env:LOCALAPPDATA\Programs\RazerBatteryTray"
